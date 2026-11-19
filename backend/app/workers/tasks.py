@@ -46,6 +46,17 @@ def _work(*parts) -> Path:
     return p
 
 
+class SourceStepTask(celery.Task):
+    """Pipeline step keyed by source_id: on a final failure, mark the source FAILED with
+    the reason instead of leaving it stuck mid-stage (the chain stops at the failed step)."""
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        source_id = args[0] if args else kwargs.get("source_id")
+        if source_id:
+            step = self.name.split(".", 1)[-1]
+            _update_source(source_id, status=VideoStatus.FAILED, error=f"{step}: {exc}"[:1000])
+
+
 def _update_source(source_id: str, **fields) -> None:
     with worker_session() as db:
         sv = db.get(SourceVideo, source_id)
@@ -81,7 +92,7 @@ def start_source_pipeline(source_id: str) -> None:
 
 # ---------------------------------------------------------------- media queue
 
-@celery.task(name="media.ingest", bind=True, max_retries=3, default_retry_delay=30)
+@celery.task(name="media.ingest", base=SourceStepTask, bind=True, max_retries=3, default_retry_delay=30)
 def ingest_source(self, source_id: str) -> None:
     try:
         with worker_session() as db:
@@ -100,11 +111,11 @@ def ingest_source(self, source_id: str) -> None:
         _update_source(source_id, storage_key=key, duration_sec=meta["duration"], width=meta["width"],
                        height=meta["height"], fps=meta["fps"], progress=10)
     except Exception as exc:
-        _update_source(source_id, status=VideoStatus.FAILED, error=f"ingest: {exc}")
+        _update_source(source_id, error=f"ingest (will retry): {exc}")  # on_failure marks FAILED
         raise self.retry(exc=exc)
 
 
-@celery.task(name="media.transcribe")
+@celery.task(name="media.transcribe", base=SourceStepTask)
 def transcribe_source(source_id: str) -> None:
     _update_source(source_id, status=VideoStatus.TRANSCRIBING, progress=12)
     src = _local_source(source_id)
@@ -170,7 +181,7 @@ def render_clip(self, clip_id: str) -> str:
 
 # ---------------------------------------------------------------- agents queue
 
-@celery.task(name="agents.score_clips")
+@celery.task(name="agents.score_clips", base=SourceStepTask)
 def score_clips(source_id: str) -> None:
     s = get_settings()
     _update_source(source_id, status=VideoStatus.ANALYZING, progress=55)
@@ -200,7 +211,7 @@ def score_clips(source_id: str) -> None:
     _update_source(source_id, progress=65)
 
 
-@celery.task(name="agents.fanout_render")
+@celery.task(name="agents.fanout_render", base=SourceStepTask)
 def fanout_render(source_id: str) -> None:
     with worker_session() as db:
         ids = [str(c.id) for c in db.scalars(select(Clip).where(Clip.source_video_id == source_id,
@@ -211,7 +222,7 @@ def fanout_render(source_id: str) -> None:
     chord(group(render_clip.si(cid) for cid in ids))(finalize_source.si(source_id))
 
 
-@celery.task(name="agents.finalize_source")
+@celery.task(name="agents.finalize_source", base=SourceStepTask)
 def finalize_source(source_id: str) -> None:
     with worker_session() as db:
         sv = db.get(SourceVideo, source_id)

@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "omniclip",
+      "credentials": [{ "accessKey": "omniclip", "secretKey": "omniclip-dev-secret" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

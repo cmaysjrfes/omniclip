@@ -1,4 +1,4 @@
-"""S3-compatible object storage (AWS S3 in prod, MinIO locally)."""
+"""S3-compatible object storage (AWS S3 in prod, SeaweedFS locally)."""
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,3 +48,20 @@ def presigned_put(key: str, content_type: str, expires: int = 3600) -> str:
     return _client(public=True).generate_presigned_url(
         "put_object", Params={"Bucket": get_settings().s3_bucket, "Key": key, "ContentType": content_type},
         ExpiresIn=expires)
+
+
+def ensure_bucket(cors_origins: list[str]) -> None:
+    """Create the bucket on first boot and allow browser PUT/GET from the dashboard."""
+    from botocore.exceptions import ClientError
+
+    c, bucket = _client(), get_settings().s3_bucket
+    try:
+        c.head_bucket(Bucket=bucket)
+    except ClientError:
+        c.create_bucket(Bucket=bucket)
+    try:
+        c.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": [{
+            "AllowedOrigins": cors_origins, "AllowedMethods": ["GET", "PUT", "HEAD"],
+            "AllowedHeaders": ["*"], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600}]})
+    except ClientError:
+        pass  # some S3-compatible stores manage CORS globally

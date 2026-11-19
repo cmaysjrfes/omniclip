@@ -104,7 +104,7 @@ export default function ClipEditor() {
                     <div className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" /> Rendering…</div>
                   </div>
                 ) : clip.video_url ? (
-                  <video key={clip.video_url} src={clip.video_url} controls playsInline className="size-full" />
+                  <video key={clip.video_url} src={clip.video_url} poster={clip.thumbnail_url ?? undefined} controls playsInline className="size-full" />
                 ) : (
                   <div className="grid size-full place-items-center px-6 text-center text-sm text-muted-foreground">
                     {clip.status === "FAILED" ? clip.review_note ?? "Render failed" : "No render available"}

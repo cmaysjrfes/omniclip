@@ -21,7 +21,7 @@ An internal platform that turns one long-form video into 20+ scored, face-tracke
 │ YuNet face track → smooth camera   │ │ Channel Launch (LangGraph)│ │   with publishAt scheduling │
 │ ASS karaoke captions → FFmpeg NVENC│ │ Schedule Optimizer        │ │ collect_metrics (hourly)    │
 └────────────────────────────────────┘ └───────────────────────────┘ └─────────────────────────────┘
-                                   S3 / MinIO: sources, transcripts, renders, thumbnails
+                                   S3 / SeaweedFS: sources, transcripts, renders, thumbnails
 ```
 
 ## Pipeline (Module 4)
@@ -58,23 +58,37 @@ All agents go through `backend/app/agents/llm.py`:
 ## Quick start
 
 ```bash
-cp .env.example .env            # fill ANTHROPIC_API_KEY, YOUTUBE_*, TOKEN_ENCRYPTION_KEY
-docker compose up --build       # postgres, redis, minio, migrate, api, 2 worker pools, beat, web
-# create the bucket once: MinIO console http://localhost:9001 (minio / minio12345) → bucket "omniclip"
+cp .env.example .env            # add ANTHROPIC_API_KEY, YOUTUBE_*, and a TOKEN_ENCRYPTION_KEY:
+python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
+docker compose up --build       # postgres, redis, storage, migrate, api, 2 worker pools, beat, web
 open http://localhost:3000
 ```
+
+On an NVIDIA host (CUDA image, NVENC rendering, Whisper large-v3 on GPU; needs the NVIDIA Container Toolkit):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+| Service | URL | Notes |
+|---|---|---|
+| Dashboard | http://localhost:3000 | |
+| API docs | http://localhost:8000/docs | send `X-API-Key` from `.env` |
+| Object storage (S3 API) | http://localhost:8333 | SeaweedFS; keys in `infra/seaweedfs-s3.json`. The API creates the bucket and its CORS rules on startup |
+
+The default stack runs on CPU with Whisper `small`. The media worker downloads the Whisper model from Hugging Face the first time it transcribes, so it needs internet access then. If you change `NEXT_PUBLIC_API_URL` or `NEXT_PUBLIC_API_KEY`, rebuild `web`, because they're compiled into the browser bundle.
 
 Local development without Docker:
 
 ```bash
 cd db && npm i && npx prisma migrate deploy
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload
 celery -A app.workers.celery_app worker -Q media,agents,publish -l info   # + `celery ... beat`
 cd frontend && npm i && cp .env.local.example .env.local && npm run dev
 ```
 
-Without a GPU, set `FFMPEG_GPU=false WHISPER_DEVICE=cpu WHISPER_COMPUTE_TYPE=int8`.
+For local development, point `S3_ENDPOINT_URL` at any S3-compatible store, for example `docker compose up storage`.
 
 Tests (no network, DB or API key needed: the LLM and YouTube are faked):
 
