@@ -1,0 +1,10 @@
+{
+  "name": "omniclip-db",
+  "private": true,
+  "scripts": {
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "studio": "prisma studio"
+  },
+  "devDependencies": { "prisma": "6.16.2" }
+}

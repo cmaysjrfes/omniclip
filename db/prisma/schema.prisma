@@ -1,0 +1,259 @@
+// Single source of truth for the database schema.
+// Prisma owns migrations (`npx prisma migrate dev`); the Python backend maps the
+// same tables with SQLAlchemy (backend/app/models.py). Keep the two in sync —
+// tables/columns are snake_case via @map/@@map so both sides read naturally.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PRISMA_DATABASE_URL")
+}
+
+enum VideoStatus {
+  QUEUED
+  DOWNLOADING
+  TRANSCRIBING
+  ANALYZING
+  READY
+  FAILED
+
+  @@map("video_status")
+}
+
+enum ClipStatus {
+  CANDIDATE
+  RENDERING
+  RENDERED
+  APPROVED
+  REJECTED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+
+  @@map("clip_status")
+}
+
+enum AgentKind {
+  CLIP_SCORER
+  BRAND_ARCHITECT
+  COMPETITOR_ANALYST
+  SCHEDULE_OPTIMIZER
+  METADATA_WRITER
+  AUTOPILOT
+
+  @@map("agent_kind")
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("run_status")
+}
+
+enum PublishStatus {
+  PENDING
+  UPLOADING
+  SCHEDULED
+  PUBLISHED
+  FAILED
+
+  @@map("publish_status")
+}
+
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email     String   @unique
+  name      String?
+  role      String   @default("editor") // admin | editor | viewer
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model Channel {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  // Niche definition (Module 2)
+  category          String
+  subCategory       String?  @map("sub_category")
+  nicheDescription  String?  @map("niche_description")
+  tone              String?
+  targetAudience    String?  @map("target_audience")
+  // Brand outputs
+  handle            String?
+  description       String?
+  keywords          String[] @default([])
+  brandKit          Json?    @map("brand_kit") // colors, fonts, art prompts, caption preset
+  // YouTube link
+  youtubeChannelId  String?  @unique @map("youtube_channel_id")
+  oauthTokenEnc     String?  @map("oauth_token_enc") // Fernet-encrypted refresh token
+  // Automation
+  autopilot         Boolean  @default(false)
+  requireApproval   Boolean  @default(true) @map("require_approval")
+  postsPerDay       Int      @default(3) @map("posts_per_day")
+  postingSlots      Json?    @map("posting_slots") // [{weekday, hour, minute, score}] from SCHEDULE_OPTIMIZER
+  timezone          String   @default("UTC")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  sources     SourceVideo[]
+  clips       Clip[]
+  agentRuns   AgentRun[]
+  competitors CompetitorReport[]
+  publishJobs PublishJob[]
+
+  @@map("channels")
+}
+
+model SourceVideo {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channelId     String?     @map("channel_id") @db.Uuid
+  title         String?
+  sourceUrl     String?     @map("source_url")
+  storageKey    String?     @map("storage_key")
+  durationSec   Float?      @map("duration_sec")
+  width         Int?
+  height        Int?
+  fps           Float?
+  status        VideoStatus @default(QUEUED)
+  progress      Int         @default(0)
+  error         String?
+  transcriptKey String?     @map("transcript_key") // word-level JSON in object storage
+  language      String?
+  targetClips   Int         @default(24) @map("target_clips")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @default(now()) @updatedAt @map("updated_at")
+
+  channel Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  clips   Clip[]
+
+  @@index([channelId])
+  @@map("source_videos")
+}
+
+model Clip {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceVideoId  String     @map("source_video_id") @db.Uuid
+  channelId      String?    @map("channel_id") @db.Uuid
+  rank           Int
+  startSec       Float      @map("start_sec")
+  endSec         Float      @map("end_sec")
+  hook           String
+  transcript     String
+  // AI score breakdown (0-100 each) + weighted composite
+  viralityScore  Float      @map("virality_score")
+  scores         Json // {hook_strength, emotional_intensity, standalone_value, retention_potential, shareability}
+  rationale      String?
+  category       String?
+  // Render config + outputs
+  layout         String     @default("auto") // auto | track | fit_blur
+  captionPreset  String     @default("bold_pop") @map("caption_preset")
+  cropTrack      Json?      @map("crop_track") // [{t, cx}] normalized speaker centre
+  renderKey      String?    @map("render_key")
+  thumbnailKey   String?    @map("thumbnail_key")
+  // Publishing metadata (METADATA_WRITER)
+  title          String?
+  description    String?
+  tags           String[]   @default([])
+  status         ClipStatus @default(CANDIDATE)
+  reviewNote     String?    @map("review_note")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @default(now()) @updatedAt @map("updated_at")
+
+  sourceVideo SourceVideo  @relation(fields: [sourceVideoId], references: [id], onDelete: Cascade)
+  channel     Channel?     @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  publishJobs PublishJob[]
+  metrics     ClipMetric[]
+
+  @@index([sourceVideoId, rank])
+  @@index([status])
+  @@map("clips")
+}
+
+model PublishJob {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId         String        @map("clip_id") @db.Uuid
+  channelId      String        @map("channel_id") @db.Uuid
+  scheduledFor   DateTime      @map("scheduled_for")
+  status         PublishStatus @default(PENDING)
+  youtubeVideoId String?       @map("youtube_video_id")
+  attempts       Int           @default(0)
+  error          String?
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  clip    Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@map("publish_jobs")
+}
+
+model ClipMetric {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId         String   @map("clip_id") @db.Uuid
+  capturedAt     DateTime @default(now()) @map("captured_at")
+  views          Int      @default(0)
+  likes          Int      @default(0)
+  comments       Int      @default(0)
+  avgViewPct     Float?   @map("avg_view_pct")
+  subscribersNet Int?     @map("subscribers_net")
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([clipId, capturedAt])
+  @@map("clip_metrics")
+}
+
+model AgentRun {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind          AgentKind
+  status        RunStatus @default(PENDING)
+  channelId     String?   @map("channel_id") @db.Uuid
+  sourceVideoId String?   @map("source_video_id") @db.Uuid
+  input         Json?
+  output        Json?
+  error         String?
+  inputTokens   Int       @default(0) @map("input_tokens")
+  outputTokens  Int       @default(0) @map("output_tokens")
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  channel Channel?     @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  events  AgentEvent[]
+
+  @@index([createdAt])
+  @@map("agent_runs")
+}
+
+model AgentEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId     String   @map("run_id") @db.Uuid
+  level     String   @default("info") // info | warn | error | success
+  message   String
+  data      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@map("agent_events")
+}
+
+model CompetitorReport {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channelId String   @map("channel_id") @db.Uuid
+  report    Json // channels analysed, hook formats, title patterns, pacing, gaps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@map("competitor_reports")
+}
