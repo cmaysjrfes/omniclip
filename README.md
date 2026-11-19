@@ -1,5 +1,7 @@
 # OmniClip & Agentic YouTube Engine
 
+[![CI](https://github.com/cmaysjrfes/omniclip/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cmaysjrfes/omniclip/actions/workflows/ci.yml)
+
 An internal platform that turns one long-form video into 20+ scored, face-tracked, captioned 9:16 Shorts. Agents also design channel brands, study competitors, pick posting times and publish to YouTube.
 
 ```
